@@ -150,6 +150,7 @@ func exchangeRateHandler(rb *riksbank.Riksbank) http.HandlerFunc {
 		rate, err := rateForDate(r.Context(), rb, base, counter, date)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		fmt.Fprintf(w, "%f", rate)
 	}
