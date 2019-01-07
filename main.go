@@ -142,28 +142,11 @@ func exchangeHandler(rb *riksbank.Riksbank) http.HandlerFunc {
 func exchangeRateHandler(rb *riksbank.Riksbank) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Content-Type", "text/plain")
-		vars := mux.Vars(r)
-		var date time.Time
-		if vars["date"] == "" {
-			date = time.Date(2019, 1, 6, 0, 0, 0, 0, time.UTC)
-		} else {
-			t, err := flags.ParseDate(vars["date"])
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-				return
-			}
-			date = t
-		}
-		if vars["base"] == "" {
-			http.Error(w, errNeedBaseCurrency.Error(), http.StatusUnprocessableEntity)
+		base, counter, date, err := parseExchangeParams(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
-		base := currency.Parse(vars["base"])
-		if vars["counter"] == "" {
-			http.Error(w, errNeedCounterCurrency.Error(), http.StatusUnprocessableEntity)
-			return
-		}
-		counter := currency.Parse(vars["counter"])
 		rate, err := rateForDate(r.Context(), rb, base, counter, date)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
