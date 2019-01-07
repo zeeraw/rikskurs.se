@@ -60,7 +60,7 @@ func rateForDate(ctx context.Context, rb *riksbank.Riksbank, base, counter curre
 func parseExchangeParams(r *http.Request) (base, counter currency.Currency, day time.Time, err error) {
 	vars := mux.Vars(r)
 	if vars["date"] == "" {
-		day = time.Date(2019, 1, 6, 0, 0, 0, 0, time.UTC)
+		day = time.Now()
 	} else {
 		t, err := date.Parse(vars["date"])
 		if err != nil {
