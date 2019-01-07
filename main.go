@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
+	"sort"
 	"text/tabwriter"
 	"time"
 
+	"github.com/zeeraw/riksbank/cli/flags"
 	"github.com/zeeraw/riksbank/currency"
 	"golang.org/x/crypto/acme/autocert"
 
@@ -25,6 +29,7 @@ func main() {
 
 	r.HandleFunc("/", homeHandler())
 	r.HandleFunc("/exchange/rate/{base:[a-zA-Z]{3}}/{counter:[a-zA-Z]{3}}", exchangeRateHandler(rb))
+	r.HandleFunc("/exchange/rate/{base:[a-zA-Z]{3}}/{counter:[a-zA-Z]{3}}/{date}", exchangeRateHandler(rb))
 
 	server := &http.Server{
 		Handler: r,
@@ -52,53 +57,84 @@ func homeHandler() http.HandlerFunc {
 		tw := tabwriter.NewWriter(w, 0, 0, 0, ' ', 0)
 		defer tw.Flush()
 		fmt.Fprintf(tw, "description\t url\t example\n")
-		fmt.Fprintf(tw, "currency exchange rate\t /exchange/rate/{base}/{counter}\t %s/exchange/rate/sek/nok\n", r.Host)
+		fmt.Fprintf(tw, "latest exchange rate for a currency pair\t /exchange/rate/{base}/{counter}\t %s/exchange/rate/sek/nok\n", r.Host)
+		fmt.Fprintf(tw, "exchange rate for currency pair on specific date\t /exchange/rate/{base}/{counter}/{date}\t %s/exchange/rate/sek/nok/2019-01-01\n", r.Host)
 		w.WriteHeader(200)
 	}
 }
+
+var (
+	errNeedBaseCurrency          = errors.New("need base currency")
+	errNeedCounterCurrency       = errors.New("need counter currency")
+	errNoCurrencyDataForPeriod   = errors.New("no data for currencies in that period")
+	errNoConversionRateForPeriod = errors.New("no conversion rate for that period")
+)
 
 func exchangeRateHandler(rb *riksbank.Riksbank) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Content-Type", "text/plain")
 		vars := mux.Vars(r)
+		var date time.Time
+		if vars["date"] == "" {
+			date = time.Date(2019, 1, 6, 0, 0, 0, 0, time.UTC)
+		} else {
+			t, err := flags.ParseDate(vars["date"])
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
+			date = t
+		}
 		if vars["base"] == "" {
-			http.Error(w, "need base currency", http.StatusUnprocessableEntity)
+			http.Error(w, errNeedBaseCurrency.Error(), http.StatusUnprocessableEntity)
 			return
 		}
 		base := currency.Parse(vars["base"])
 		if vars["counter"] == "" {
-			http.Error(w, "need counter currency", http.StatusUnprocessableEntity)
+			http.Error(w, errNeedCounterCurrency.Error(), http.StatusUnprocessableEntity)
 			return
 		}
 		counter := currency.Parse(vars["counter"])
-		res, err := rb.ExchangeRates(r.Context(), &riksbank.ExchangeRatesRequest{
-			CurrencyPairs: []currency.Pair{
-				currency.Pair{
-					Base:    base,
-					Counter: counter,
-				},
-			},
-			AggregateMethod: riksbank.Daily,
-			From:            time.Now(),
-			To:              time.Now(),
-		})
+		rate, err := rateForDate(r.Context(), rb, base, counter, date)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
 		}
-		var value *float64
-		for _, er := range res.ExchangeRates {
-			if er.Base == base && er.Counter == counter {
-				value = er.Value
-				break
-			}
-		}
-		if value == nil {
-			http.Error(w, "no data for currencies in that period", http.StatusInternalServerError)
-			return
-		}
-		fmt.Fprintf(w, "%f", *value)
+		fmt.Fprintf(w, "%f", rate)
 	}
+}
+
+func rateForDate(ctx context.Context, rb *riksbank.Riksbank, base, counter currency.Currency, date time.Time) (rate float64, err error) {
+	res, err := rb.ExchangeRates(ctx, &riksbank.ExchangeRatesRequest{
+		CurrencyPairs: []currency.Pair{
+			currency.Pair{
+				Base:    base,
+				Counter: counter,
+			},
+		},
+		AggregateMethod: riksbank.Daily,
+		From:            date.AddDate(0, 0, -7),
+		To:              date,
+	})
+	if err != nil {
+		return rate, err
+	}
+	exchangeRates := riksbank.ExchangeRates{}
+	for _, er := range res.ExchangeRates {
+		if er.Base == base && er.Counter == counter {
+			exchangeRates = append(exchangeRates, er)
+		}
+	}
+	sort.Slice(exchangeRates, func(i int, j int) bool {
+		return exchangeRates[j].Date.UnixNano() < exchangeRates[i].Date.UnixNano()
+	})
+	if len(exchangeRates) < 1 {
+		return rate, errNoCurrencyDataForPeriod
+	}
+	value := exchangeRates[0].Value
+	if value == nil {
+		return rate, errNoConversionRateForPeriod
+	}
+	return *value, nil
 }
 
 func exchangeHandler(rb *riksbank.Riksbank) http.HandlerFunc {
