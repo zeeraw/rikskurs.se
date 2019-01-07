@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"text/tabwriter"
 	"time"
 
@@ -30,6 +31,10 @@ func main() {
 	r.HandleFunc("/", homeHandler())
 	r.HandleFunc("/exchange/rate/{base:[a-zA-Z]{3}}/{counter:[a-zA-Z]{3}}", exchangeRateHandler(rb))
 	r.HandleFunc("/exchange/rate/{base:[a-zA-Z]{3}}/{counter:[a-zA-Z]{3}}/{date}", exchangeRateHandler(rb))
+	r.HandleFunc(`/exchange/{value:\d+.\d+}/{base:[a-zA-Z]{3}}/{counter:[a-zA-Z]{3}}`, exchangeHandler(rb))
+	r.HandleFunc(`/exchange/{value:\d+}/{base:[a-zA-Z]{3}}/{counter:[a-zA-Z]{3}}`, exchangeHandler(rb))
+	r.HandleFunc(`/exchange/{value:\d+.\d+}/{base:[a-zA-Z]{3}}/{counter:[a-zA-Z]{3}}/{date}`, exchangeHandler(rb))
+	r.HandleFunc(`/exchange/{value:\d+}/{base:[a-zA-Z]{3}}/{counter:[a-zA-Z]{3}}/{date}`, exchangeHandler(rb))
 
 	server := &http.Server{
 		Handler: r,
@@ -56,9 +61,21 @@ func homeHandler() http.HandlerFunc {
 		w.Header().Add("Content-Type", "text/plain")
 		tw := tabwriter.NewWriter(w, 0, 0, 0, ' ', 0)
 		defer tw.Flush()
+		endpoints := []struct {
+			desc    string
+			url     string
+			example string
+		}{
+			{"latest exchange rate for a currency pair", "/exchange/rate/{base}/{counter}", "/exchange/rate/sek/nok"},
+			{"exchange rate for currency pair on a specific date", "/exchange/rate/{base}/{counter}/{date}", "/exchange/rate/sek/nok/2019-01-01"},
+			{"convert currency at the latest exchange rate", "/exchange/{value}/{base}/{counter}", "/exchange/1200.5/sek/nok"},
+			{"convert currency at the exchange rate of a specific date", "/exchange/{value}/{base}/{counter}/{date}", "/exchange/1200.5/sek/nok/2019-01-01"},
+		}
+		fmt.Fprintf(w, "exchange and interest rate http api with only plain text response values (data sourced from riksbank.se)\n\n")
 		fmt.Fprintf(tw, "description\t url\t example\n")
-		fmt.Fprintf(tw, "latest exchange rate for a currency pair\t /exchange/rate/{base}/{counter}\t %s/exchange/rate/sek/nok\n", r.Host)
-		fmt.Fprintf(tw, "exchange rate for currency pair on specific date\t /exchange/rate/{base}/{counter}/{date}\t %s/exchange/rate/sek/nok/2019-01-01\n", r.Host)
+		for _, ep := range endpoints {
+			fmt.Fprintf(tw, "%s\t %s\t %s%s\n", ep.desc, ep.url, r.Host, ep.example)
+		}
 		w.WriteHeader(200)
 	}
 }
@@ -69,6 +86,58 @@ var (
 	errNoCurrencyDataForPeriod   = errors.New("no data for currencies in that period")
 	errNoConversionRateForPeriod = errors.New("no conversion rate for that period")
 )
+
+func parseExchangeParams(r *http.Request) (base, counter currency.Currency, date time.Time, err error) {
+	vars := mux.Vars(r)
+	if vars["date"] == "" {
+		date = time.Date(2019, 1, 6, 0, 0, 0, 0, time.UTC)
+	} else {
+		t, err := flags.ParseDate(vars["date"])
+		if err != nil {
+			return base, counter, date, err
+		}
+		date = t
+	}
+	if vars["base"] == "" {
+		return base, counter, date, errNeedBaseCurrency
+	}
+	base = currency.Parse(vars["base"])
+	if vars["counter"] == "" {
+		return base, counter, date, errNeedCounterCurrency
+	}
+	counter = currency.Parse(vars["counter"])
+	return base, counter, date, nil
+}
+
+func parseValueParams(r *http.Request) (f float64, err error) {
+	vars := mux.Vars(r)
+	if vars["value"] == "" {
+		return f, errors.New("no value provided")
+	}
+	f, err = strconv.ParseFloat(vars["value"], 64)
+	return f, err
+}
+
+func exchangeHandler(rb *riksbank.Riksbank) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-Type", "text/plain")
+		value, err := parseValueParams(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		base, counter, date, err := parseExchangeParams(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		rate, err := rateForDate(r.Context(), rb, base, counter, date)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		fmt.Fprintf(w, "%f", rate*value)
+	}
+}
 
 func exchangeRateHandler(rb *riksbank.Riksbank) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -135,9 +204,4 @@ func rateForDate(ctx context.Context, rb *riksbank.Riksbank, base, counter curre
 		return rate, errNoConversionRateForPeriod
 	}
 	return *value, nil
-}
-
-func exchangeHandler(rb *riksbank.Riksbank) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-	}
 }
