@@ -57,16 +57,25 @@ func rateForDate(ctx context.Context, rb *riksbank.Riksbank, base, counter curre
 	return *value, nil
 }
 
-func parseExchangeParams(r *http.Request) (base, counter currency.Currency, day time.Time, err error) {
+func parseDateParam(r *http.Request) (day time.Time, err error) {
 	vars := mux.Vars(r)
 	if vars["date"] == "" {
 		day = time.Now()
 	} else {
 		t, err := date.Parse(vars["date"])
 		if err != nil {
-			return base, counter, day, err
+			return day, err
 		}
 		day = t
+	}
+	return day, nil
+}
+
+func parseExchangeParams(r *http.Request) (base, counter currency.Currency, day time.Time, err error) {
+	vars := mux.Vars(r)
+	day, err = parseDateParam(r)
+	if err != nil {
+		return base, counter, day, err
 	}
 	if vars["base"] == "" {
 		return base, counter, day, errNeedBaseCurrency
@@ -89,16 +98,6 @@ func parseValueParams(r *http.Request) (f float64, err error) {
 }
 
 func homeHandler() http.HandlerFunc {
-	endpoints := []struct {
-		desc    string
-		url     string
-		example string
-	}{
-		{"latest exchange rate for a currency pair", "/exchange/rate/{base}/{counter}", "/exchange/rate/sek/nok"},
-		{"exchange rate for currency pair on a specific date", "/exchange/rate/{base}/{counter}/{date}", "/exchange/rate/sek/nok/2019-01-01"},
-		{"convert currency at the latest exchange rate", "/exchange/{value}/{base}/{counter}", "/exchange/1200.5/sek/nok"},
-		{"convert currency at the exchange rate of a specific date", "/exchange/{value}/{base}/{counter}/{date}", "/exchange/1200.5/sek/nok/2019-01-01"},
-	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Content-Type", "text/plain")
 		tw := tabwriter.NewWriter(w, 0, 0, 0, ' ', 0)
@@ -148,5 +147,25 @@ func exchangeRateHandler(rb *riksbank.Riksbank) http.HandlerFunc {
 			return
 		}
 		fmt.Fprintf(w, "%f", rate)
+	}
+}
+
+func dayHandler(rb *riksbank.Riksbank) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-Type", "text/plain")
+		day, err := parseDateParam(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		res, err := rb.Days(r.Context(), &riksbank.DaysRequest{
+			From: day,
+			To:   day,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, "%v", res.Days[0].IsBankDay)
 	}
 }
