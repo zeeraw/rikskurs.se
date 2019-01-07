@@ -34,7 +34,7 @@ func main() {
 			Prompt: autocert.AcceptTOS,
 			Cache:  autocert.DirCache("certs"),
 		}
-		server.Addr = ":433"
+		server.Addr = ":443"
 		server.TLSConfig = &tls.Config{
 			GetCertificate: certManager.GetCertificate,
 		}
