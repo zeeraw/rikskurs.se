@@ -1,11 +1,9 @@
 package main
 
 import (
-	"crypto/tls"
 	"flag"
+	"log"
 	"net/http"
-
-	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/gorilla/mux"
 	"github.com/zeeraw/riksbank"
@@ -46,20 +44,7 @@ func main() {
 
 	server := &http.Server{
 		Handler: r,
+		Addr:    ":8080",
 	}
-	if production {
-		certManager := autocert.Manager{
-			Prompt: autocert.AcceptTOS,
-			Cache:  autocert.DirCache("certs"),
-		}
-		server.Addr = ":443"
-		server.TLSConfig = &tls.Config{
-			GetCertificate: certManager.GetCertificate,
-		}
-		go http.ListenAndServe(":80", certManager.HTTPHandler(nil))
-		server.ListenAndServeTLS("", "")
-		return
-	}
-	server.Addr = ":8080"
-	server.ListenAndServeTLS("certs/local.rikskurs.se.pem", "certs/local.rikskurs.se-key.pem")
+	log.Fatalln(server.ListenAndServe())
 }

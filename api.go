@@ -107,7 +107,7 @@ func homeHandler() http.HandlerFunc {
 		for _, ep := range endpoints {
 			fmt.Fprintf(tw, "%s\t %s\t %s%s\n", ep.desc, ep.url, r.Host, ep.example)
 		}
-		w.WriteHeader(200)
+		return
 	}
 }
 
